@@ -1,6 +1,8 @@
 import type { CampaignSummary, SendItem, SendsPage } from './types';
 
 export const SNAPSHOT_PAGE_SIZE = 1000;
+/** The dashboard pins itself to v1 explicitly rather than relying on the unversioned alias. */
+export const API_BASE = '/v1';
 
 export interface CampaignApi {
   getSummary(campaignId: number, signal?: AbortSignal): Promise<CampaignSummary>;
@@ -14,7 +16,7 @@ async function json<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export function createApi(baseUrl = ''): CampaignApi {
+export function createApi(baseUrl = API_BASE): CampaignApi {
   return {
     getSummary: (id, signal) => fetch(`${baseUrl}/campaigns/${id}/summary`, { signal }).then(json<CampaignSummary>),
     getSendsPage: (id, cursor, signal) => {

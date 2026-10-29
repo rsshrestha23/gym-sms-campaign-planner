@@ -1,3 +1,6 @@
+/** The simulator is a client like any other, so it pins the API version it was written against. */
+export const API_VERSION_PREFIX = '/v1';
+
 export interface PlannedSendRef {
   id: number;
   scheduledAt: string;
@@ -34,7 +37,7 @@ export async function fetchPlannedSends(
   const sends: PlannedSendRef[] = [];
   let cursor: string | null = null;
   do {
-    const url = new URL(`/campaigns/${campaignId}/sends`, baseUrl);
+    const url = new URL(`${API_VERSION_PREFIX}/campaigns/${campaignId}/sends`, baseUrl);
     url.searchParams.set('status', 'planned');
     url.searchParams.set('limit', String(pageSize));
     if (cursor) url.searchParams.set('cursor', cursor);
@@ -48,7 +51,7 @@ export async function fetchPlannedSends(
 }
 
 /**
- * POSTs every payload to /webhooks/provider with at most `concurrency` requests in flight.
+ * POSTs every payload to /v1/webhooks/provider with at most `concurrency` requests in flight.
  * `ratePerSecond` additionally spaces request starts for a slower demo.
  */
 export async function dispatchEvents(
@@ -66,7 +69,7 @@ export async function dispatchEvents(
     onProgress?: (done: number, total: number) => void;
   } = {},
 ): Promise<DispatchReport> {
-  const url = new URL('/webhooks/provider', baseUrl);
+  const url = new URL(`${API_VERSION_PREFIX}/webhooks/provider`, baseUrl);
   const report: DispatchReport = {
     attempted: 0,
     applied: 0,

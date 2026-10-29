@@ -61,7 +61,7 @@ export async function simulate(options: SimulateOptions, log: (line: string) => 
       `undelivered ${batch.outcomes.undelivered}, failed ${batch.outcomes.failed})`,
   );
   log(
-    `Posting to ${options.baseUrl}/webhooks/provider with ${options.concurrency} in flight` +
+    `Posting to ${options.baseUrl}/v1/webhooks/provider with ${options.concurrency} in flight` +
       (options.ratePerSecond ? `, at most ${options.ratePerSecond} req/s` : ''),
   );
 

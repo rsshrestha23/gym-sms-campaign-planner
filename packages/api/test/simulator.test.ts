@@ -68,9 +68,9 @@ describe('fetchPlannedSends', () => {
       const sends = await fetchPlannedSends(url, 1, { pageSize: 10 });
       expect(sends.map((s) => s.id)).toEqual(all.map((s) => s.id));
       expect(seen).toEqual([
-        '/campaigns/1/sends?status=planned&limit=10',
-        '/campaigns/1/sends?status=planned&limit=10&cursor=10',
-        '/campaigns/1/sends?status=planned&limit=10&cursor=20',
+        '/v1/campaigns/1/sends?status=planned&limit=10',
+        '/v1/campaigns/1/sends?status=planned&limit=10&cursor=10',
+        '/v1/campaigns/1/sends?status=planned&limit=10&cursor=20',
       ]);
     } finally {
       server.close();

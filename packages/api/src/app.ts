@@ -7,10 +7,11 @@ import { liveRoutes } from './live/routes';
 import { SseHub } from './live/sse-hub';
 import { ProviderWebhookService } from './webhooks/provider-service';
 import { webhookRoutes } from './webhooks/routes';
+import { mountVersions } from './versioning';
 
 export interface AppDeps {
   pool: Pool;
-  /** SSE hub for GET /campaigns/:id/events; also the publisher unless one is passed explicitly. */
+  /** SSE hub for GET /v1/campaigns/:id/events; also the publisher unless one is passed explicitly. */
   hub?: SseHub;
   publisher?: SendUpdatePublisher;
 }
@@ -32,10 +33,13 @@ export function createApp({ pool, hub, publisher }: AppDeps): Express {
     }
   });
 
-  app.use(webhookRoutes(webhookService));
-  app.use(express.json({ limit: '16kb' }));
-  app.use(campaignRoutes(repo));
-  if (hub) app.use(liveRoutes(repo, hub));
+  const v1 = express.Router();
+  v1.use(webhookRoutes(webhookService));
+  v1.use(express.json({ limit: '16kb' }));
+  v1.use(campaignRoutes(repo));
+  if (hub) v1.use(liveRoutes(repo, hub));
+
+  app.use(mountVersions({ v1 }));
 
   app.use((_req, res) => {
     res.status(404).json({ error: 'not_found' });

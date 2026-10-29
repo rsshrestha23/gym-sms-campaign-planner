@@ -23,16 +23,22 @@ On startup the API runs migrations, then seeds the data, and only then starts li
 Campaign 1 starts **unplanned**. Click **Plan campaign** on the dashboard, or run:
 
 ```bash
-curl -X POST http://localhost:3000/campaigns/1/plan
+curl -X POST http://localhost:3000/v1/campaigns/1/plan
 ```
 
 Planning stores one send per member with a calculated UTC `scheduledAt`. It never sends anything and starts no timers. Running it again, or running it concurrently, returns the same plan.
 
 ## API
 
-All paths are rooted at `/` (there is no `/api` prefix). Timestamps are ISO‑8601 UTC.
+The API is versioned by URL path, and `/v1` is the current version. Timestamps are ISO‑8601 UTC.
 
-| Method & path | Purpose |
+- **Canonical paths** start with `/v1`, for example `/v1/campaigns/1/summary`. The dashboard and the simulator both use them.
+- **Unversioned paths** from the original spec (`/campaigns/...`, `/webhooks/provider`, with no `/api` prefix) still work. They are a permanent alias **pinned to v1**, so a future v2 never changes what they return. A provider webhook URL that is already configured keeps working.
+- Every versioned or aliased response carries an `API-Version: v1` header.
+- An unknown version such as `/v2/...` returns `404 {"error":"unsupported_api_version","supportedVersions":["v1"]}`.
+- `/health` is infrastructure and stays unversioned.
+
+| Method & path (prefix with `/v1`) | Purpose |
 | --- | --- |
 | `POST /campaigns/:id/plan` | Create the plan once. Returns `201` when it is created and `200` when it already exists; both include branch/status counts |
 | `GET /campaigns/:id/summary` | Status counts per branch (zeros included), plus the earliest and latest `scheduledAt` |
@@ -66,7 +72,7 @@ Or run it inside the API container:
 docker compose exec -e API_BASE_URL=http://localhost:3000 api npm run simulate
 ```
 
-The simulator talks to the API only over HTTP. It reads every `planned` send from `GET /campaigns/1/sends`, then generates one `sent` event and one final event per send, split exactly 85% delivered, 10% undelivered and 5% failed. Each event is repeated 1–3 times with the same `eventId`, and all copies are shuffled together. It posts with 50 requests in flight. `--rate N` caps request starts per second, and `--concurrency`, `--seed` and `--campaign` are also available. A fixed PRNG seed makes runs reproducible. For the seeded plan that means 4,640 sends, 9,280 logical events and 9,280–27,840 HTTP requests. Running it again is harmless: nothing is still `planned`, and reused event IDs would be acknowledged as duplicates.
+The simulator talks to the API only over HTTP. It reads every `planned` send from `GET /v1/campaigns/1/sends`, posts to `/v1/webhooks/provider`, then generates one `sent` event and one final event per send, split exactly 85% delivered, 10% undelivered and 5% failed. Each event is repeated 1–3 times with the same `eventId`, and all copies are shuffled together. It posts with 50 requests in flight. `--rate N` caps request starts per second, and `--concurrency`, `--seed` and `--campaign` are also available. A fixed PRNG seed makes runs reproducible. For the seeded plan that means 4,640 sends, 9,280 logical events and 9,280–27,840 HTTP requests. Running it again is harmless: nothing is still `planned`, and reused event IDs would be acknowledged as duplicates.
 
 ## Seed and reset
 
@@ -83,6 +89,7 @@ After `reset`, campaign 1 is unplanned again. Plan it to get a fresh schedule, w
 packages/api/src
   db/          pool, migration runner, 001_initial.sql (constraints + transition trigger)
   seed/        deterministic seed data, seed + reset
+  versioning.ts  /v1 mounting, unversioned v1 alias, unknown-version 404s
   campaigns/   pure local-time planner, repository (plan/summary/keyset), routes
   webhooks/    payload schema, receipt + at-most-once processing service, route
   live/        publisher contract, in-process SSE hub, SSE route
