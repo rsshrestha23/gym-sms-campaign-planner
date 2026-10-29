@@ -1,0 +1,30 @@
+{
+  "name": "gym-sms-campaign",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Gym win-back SMS campaign planner with idempotent provider webhooks and a live dashboard",
+  "workspaces": [
+    "packages/api",
+    "packages/web"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "npm run build -w @gym/api && npm run build -w @gym/web",
+    "typecheck": "npm run typecheck -w @gym/api && npm run typecheck -w @gym/web",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev:api": "npm run dev -w @gym/api",
+    "dev:web": "npm run dev -w @gym/web",
+    "migrate": "npm run migrate -w @gym/api",
+    "seed": "npm run seed -w @gym/api",
+    "reset": "npm run reset -w @gym/api",
+    "simulate": "npm run simulate -w @gym/api --"
+  },
+  "devDependencies": {
+    "@testcontainers/postgresql": "^12.2.1",
+    "testcontainers": "^12.2.1",
+    "vitest": "^3.2.7"
+  }
+}
