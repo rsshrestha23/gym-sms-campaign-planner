@@ -68,7 +68,11 @@ export function App() {
               setPlanning(false);
             }}
           >
-            {planning ? 'Planning…' : 'Plan campaign'}
+            {planning
+              ? data.planRun
+                ? `Planning… ${Math.round((data.planRun.processedRows / Math.max(data.planRun.expectedRows, 1)) * 100)}%`
+                : 'Planning…'
+              : 'Plan campaign'}
           </button>
         </div>
       )}
@@ -82,6 +86,8 @@ export function App() {
             viewerZone={viewerZone}
             selected={branchId === b.id}
             onSelect={setBranchId}
+            capacity={data.capacity?.branches.find((c) => c.branchId === b.id)}
+            planProgress={data.planRun?.branches.find((p) => p.branchId === b.id)}
           />
         ))}
       </div>
@@ -114,10 +120,12 @@ export function App() {
           <span className="muted grow-right">
             {data.loading && data.loadedRows === 0
               ? 'Loading sends…'
-              : `${data.rows.length.toLocaleString()} of ${data.loadedRows.toLocaleString()} sends`}
+              : data.mode === 'server'
+                ? `${data.rows.length.toLocaleString()} loaded of ${(data.summary?.totals.total ?? 0).toLocaleString()} sends`
+                : `${data.rows.length.toLocaleString()} of ${data.loadedRows.toLocaleString()} sends`}
           </span>
         </div>
-        <SendsTable rows={data.rows} branches={branches} viewerZone={viewerZone} />
+        <SendsTable rows={data.rows} branches={branches} viewerZone={viewerZone} truncated={data.truncated} />
       </section>
     </div>
   );

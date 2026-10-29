@@ -34,18 +34,20 @@ describe('schema', () => {
     expect(await migrate(pool)).toEqual([]);
   });
 
-  it('has the required tables and columns', async () => {
-    expect(await columns('branches')).toEqual(['id', 'name', 'time_zone']);
-    expect(await columns('members')).toEqual(['branch_id', 'id', 'name', 'phone', 'sms_opt_out']);
-    expect(await columns('campaigns')).toEqual(['end_date', 'id', 'name', 'planned_at', 'start_date']);
-    expect(await columns('campaign_branches')).toEqual(['branch_id', 'campaign_id']);
-    expect(await columns('sends')).toEqual([
-      'branch_id', 'campaign_id', 'created_at', 'id', 'member_id', 'scheduled_at', 'status', 'status_version', 'updated_at',
-    ]);
-    expect(await columns('webhook_receipts')).toEqual(['content_type', 'id', 'raw_body', 'received_at']);
-    expect(await columns('provider_events')).toEqual([
-      'disposition', 'event_id', 'occurred_at', 'processed_at', 'reason', 'receipt_id', 'send_id', 'status',
-    ]);
+  it('keeps every demo-required table and column (production migrations only add)', async () => {
+    const required: Record<string, string[]> = {
+      branches: ['id', 'name', 'time_zone'],
+      members: ['branch_id', 'id', 'name', 'phone', 'sms_opt_out'],
+      campaigns: ['end_date', 'id', 'name', 'planned_at', 'start_date'],
+      campaign_branches: ['branch_id', 'campaign_id'],
+      sends: ['branch_id', 'campaign_id', 'created_at', 'id', 'member_id', 'scheduled_at', 'status', 'status_version', 'updated_at'],
+      // Legacy demo tables stay until a contract migration drops them.
+      webhook_receipts: ['content_type', 'id', 'raw_body', 'received_at'],
+      provider_events: ['disposition', 'event_id', 'occurred_at', 'processed_at', 'reason', 'receipt_id', 'send_id', 'status'],
+    };
+    for (const [table, cols] of Object.entries(required)) {
+      expect(await columns(table), table).toEqual(expect.arrayContaining(cols));
+    }
   });
 
   it('declares the composite keys and the partial slot index', async () => {

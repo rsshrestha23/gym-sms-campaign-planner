@@ -38,7 +38,7 @@ const post = (body: unknown, raw = false) =>
 
 const sendRow = (id = sendId) =>
   pool.query('SELECT status, status_version FROM sends WHERE id = $1', [id]).then((r) => r.rows[0]);
-const receipts = () => count(pool, 'SELECT count(*) AS n FROM webhook_receipts');
+const receipts = () => count(pool, 'SELECT count(*) AS n FROM provider_event_receipts');
 
 describe('POST /webhooks/provider', () => {
   it('applies a valid event, records the raw body exactly, and publishes after commit', async () => {
@@ -48,9 +48,9 @@ describe('POST /webhooks/provider', () => {
     expect(res.body).toMatchObject({ result: 'applied', eventId: 'evt-1', statusVersion: 2 });
     expect(await sendRow()).toEqual({ status: 'sent', status_version: 2 });
 
-    const { rows } = await pool.query('SELECT raw_body FROM webhook_receipts');
+    const { rows } = await pool.query('SELECT raw_body FROM provider_event_receipts');
     expect(rows.map((r) => r.raw_body.toString('utf8'))).toEqual([raw]);
-    const { rows: events } = await pool.query('SELECT event_id, send_id, status, occurred_at, disposition, reason FROM provider_events');
+    const { rows: events } = await pool.query('SELECT event_id, send_id, status, occurred_at, disposition, reason FROM provider_event_applications');
     expect(events).toEqual([
       { event_id: 'evt-1', send_id: sendId, status: 'sent', occurred_at: new Date('2026-10-23T08:00:05Z'), disposition: 'applied', reason: null },
     ]);
@@ -67,7 +67,7 @@ describe('POST /webhooks/provider', () => {
       expect(res.body.result).toBe(i === 0 ? 'applied' : 'duplicate');
     }
     expect(await receipts()).toBe(3);
-    expect(await count(pool, 'SELECT count(*) AS n FROM provider_events')).toBe(1);
+    expect(await count(pool, 'SELECT count(*) AS n FROM provider_event_applications')).toBe(1);
     expect(published).toHaveLength(1);
   });
 
@@ -77,7 +77,7 @@ describe('POST /webhooks/provider', () => {
     expect(res.status).toBe(200);
     expect(res.body.result).toBe('duplicate');
     expect(await sendRow()).toEqual({ status: 'sent', status_version: 2 });
-    const { rows } = await pool.query('SELECT raw_body FROM webhook_receipts ORDER BY id');
+    const { rows } = await pool.query('SELECT raw_body FROM provider_event_receipts ORDER BY id');
     expect(rows.map((r) => JSON.parse(r.raw_body.toString()).status)).toEqual(['sent', 'failed']);
   });
 
@@ -98,7 +98,7 @@ describe('POST /webhooks/provider', () => {
     expect(late.status).toBe(200);
     expect(late.body).toMatchObject({ result: 'ignored', reason: 'stale' });
     expect(await sendRow()).toEqual({ status: 'delivered', status_version: 2 });
-    const { rows } = await pool.query(`SELECT disposition, reason FROM provider_events WHERE status = 'sent'`);
+    const { rows } = await pool.query(`SELECT disposition, reason FROM provider_event_applications WHERE status = 'sent'`);
     expect(rows).toEqual([{ disposition: 'ignored', reason: 'stale' }]);
   });
 
@@ -135,14 +135,14 @@ describe('POST /webhooks/provider', () => {
     await Promise.all(shuffled.map((b) => post(b).expect(200)));
     const { rows } = await pool.query(`SELECT status, count(*)::int AS n FROM sends WHERE id = ANY($1) GROUP BY status`, [ids]);
     expect(rows).toEqual([{ status: 'delivered', n: 40 }]);
-    expect(await count(pool, 'SELECT count(*) AS n FROM provider_events')).toBe(80);
+    expect(await count(pool, 'SELECT count(*) AS n FROM provider_event_applications')).toBe(80);
   });
 
   it('acknowledges a well-formed event for an unknown send', async () => {
     const res = await post(event({ sendId: 987654 }));
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ result: 'ignored', reason: 'unknown_send' });
-    const { rows } = await pool.query('SELECT disposition, reason FROM provider_events');
+    const { rows } = await pool.query('SELECT disposition, reason FROM provider_event_applications');
     expect(rows).toEqual([{ disposition: 'ignored', reason: 'unknown_send' }]);
     expect(await receipts()).toBe(1);
   });
@@ -166,16 +166,16 @@ describe('POST /webhooks/provider', () => {
   ])('rejects %s with 400 but keeps the raw receipt', async (_name, raw) => {
     const res = await post(raw, true);
     expect(res.status).toBe(400);
-    const { rows } = await pool.query('SELECT raw_body FROM webhook_receipts');
+    const { rows } = await pool.query('SELECT raw_body FROM provider_event_receipts');
     expect(rows.map((r) => r.raw_body.toString('utf8'))).toEqual([raw]);
-    expect(await count(pool, 'SELECT count(*) AS n FROM provider_events')).toBe(0);
+    expect(await count(pool, 'SELECT count(*) AS n FROM provider_event_applications')).toBe(0);
   });
 
   it('stores non-JSON content types and binary bodies byte for byte', async () => {
     const bytes = Buffer.from([0x00, 0xff, 0x7b, 0x0a]);
     const res = await request(app).post('/webhooks/provider').set('content-type', 'application/octet-stream').send(bytes);
     expect(res.status).toBe(400);
-    const { rows } = await pool.query('SELECT raw_body, content_type FROM webhook_receipts');
+    const { rows } = await pool.query('SELECT raw_body, content_type FROM provider_event_receipts');
     expect(Buffer.compare(rows[0].raw_body, bytes)).toBe(0);
     expect(rows[0].content_type).toBe('application/octet-stream');
   });
@@ -207,7 +207,7 @@ describe('POST /webhooks/provider', () => {
     const failed = await request(flaky).post('/webhooks/provider').set('content-type', 'application/json').send(JSON.stringify(e));
     expect(failed.status).toBe(503);
     expect(await receipts()).toBe(1);
-    expect(await count(pool, 'SELECT count(*) AS n FROM provider_events')).toBe(0);
+    expect(await count(pool, 'SELECT count(*) AS n FROM provider_event_applications')).toBe(0);
     expect((await sendRow()).status).toBe('planned');
 
     const retry = await post(e);

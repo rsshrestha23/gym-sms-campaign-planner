@@ -1,0 +1,60 @@
+# Alert rules over the metrics each deployable exports (prom-client; OTel-compatible).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata: { name: gym-sms }
+spec:
+  groups:
+    - name: gym-sms.delivery
+      rules:
+        - alert: DueSendLagHigh
+          expr: max(gym_due_send_lag_seconds) > 120
+          for: 2m
+          annotations: { summary: "Due sends waiting >2m for dispatch; slots will be missed (grace 10m)", runbook: "docs/production-runbook.md#queue-backlog" }
+        - alert: MissedSlots
+          expr: increase(gym_dispatched_sends_total{result="missed"}[10m]) > 0
+          annotations: { summary: "Sends marked not_scheduled because their slot passed", runbook: "docs/production-runbook.md#queue-backlog" }
+        - alert: OutboxBacklog
+          expr: max(gym_outbox_oldest_pending_seconds) > 60
+          for: 2m
+          annotations: { summary: "Outbox rows not relayed for >60s (Redis or relay down)", runbook: "docs/production-runbook.md#redis-data-loss" }
+        - alert: QueueOldestJobOld
+          expr: max(gym_queue_oldest_waiting_seconds) > 300
+          for: 5m
+          annotations: { summary: "BullMQ jobs waiting >5m", runbook: "docs/production-runbook.md#queue-backlog" }
+        - alert: DeadLetters
+          expr: increase(gym_send_jobs_total{result="dead_letter"}[15m]) > 0
+          annotations: { summary: "Sends parked in dead_letter need operator review", runbook: "docs/production-runbook.md#dead-letters" }
+        - alert: ProviderErrorRate
+          expr: sum(rate(gym_provider_responses_total{outcome!="accepted"}[5m])) / sum(rate(gym_provider_responses_total[5m])) > 0.2
+          for: 5m
+          annotations: { summary: ">20% of provider calls failing", runbook: "docs/production-runbook.md#provider-outage" }
+        - alert: ProviderRateLimited
+          expr: increase(gym_provider_responses_total{outcome="rate_limited"}[5m]) > 50
+          annotations: { summary: "Provider is throttling; lower PROVIDER_RATE_LIMIT_PER_SECOND", runbook: "docs/production-runbook.md#provider-outage" }
+        - alert: AmbiguousSends
+          expr: increase(gym_provider_responses_total{outcome="ambiguous"}[15m]) > 10
+          annotations: { summary: "Provider outcomes unknown; check idempotency window", runbook: "docs/production-runbook.md#provider-outage" }
+        - alert: WorkersStalling
+          expr: increase(gym_worker_stalled_jobs_total[10m]) > 5
+          annotations: { summary: "Workers dying mid-job (OOM/crash?)" }
+    - name: gym-sms.webhooks
+      rules:
+        - alert: WebhookInvalidSignatures
+          expr: increase(gym_webhook_requests_total{result="invalid_signature"}[10m]) > 20
+          annotations: { summary: "Many invalid webhook signatures: secret rotation mismatch or attack", runbook: "docs/production-runbook.md#webhook-outage" }
+        - alert: WebhookErrors
+          expr: increase(gym_webhook_requests_total{result="error"}[5m]) > 10
+          annotations: { summary: "Webhook processing failing (provider will retry)", runbook: "docs/production-runbook.md#postgresql-failover" }
+        - alert: WebhooksStopped
+          expr: sum(rate(gym_provider_responses_total{outcome="accepted"}[15m])) > 0 and sum(rate(gym_webhook_requests_total[15m])) == 0
+          for: 15m
+          annotations: { summary: "Messages are being sent but no delivery callbacks arrive", runbook: "docs/production-runbook.md#webhook-outage" }
+    - name: gym-sms.redis
+      rules:
+        - alert: RedisEvictingKeys
+          expr: max(gym_redis_evicted_keys) > 0
+          annotations: { summary: "Redis evicted keys: BullMQ jobs may be lost; set noeviction", runbook: "docs/production-runbook.md#redis-data-loss" }
+        - alert: RedisMemoryHigh
+          expr: max(gym_redis_memory_bytes{kind="used"}) / max(gym_redis_memory_bytes{kind="max"} > 0) > 0.8
+          for: 10m
+          annotations: { summary: "Redis >80% of maxmemory" }

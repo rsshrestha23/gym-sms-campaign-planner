@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gym-sms-config
+data:
+  NODE_ENV: production
+  LOG_LEVEL: info
+  RUN_MIGRATIONS: "false"       # the migrate Job owns schema changes
+  SEED_DEMO_DATA: "false"
+  SMS_PROVIDER: http
+  SMS_PROVIDER_ACCOUNT: primary
+  SMS_PROVIDER_URL: https://sms-vendor.example.com/v1/messages   # replace once a vendor is selected
+  SMS_PROVIDER_TIMEOUT_MS: "10000"
+  PROVIDER_RATE_LIMIT_PER_SECOND: "100"     # vendor account quota, enforced queue-wide
+  PROVIDER_IDEMPOTENCY_WINDOW_MS: "86400000" # must not exceed the vendor's key retention
+  WORKER_CONCURRENCY: "25"
+  SEND_MAX_ATTEMPTS: "8"
+  CLAIM_LEASE_MS: "60000"
+  MISSED_SLOT_GRACE_MS: "600000"
+  DISPATCH_BATCH_SIZE: "500"
+  WEBHOOK_TOLERANCE_SEC: "300"
+  WEBHOOK_RATE_LIMIT_PER_SECOND: "500"       # per API pod; the WAF limits globally
+  RECEIPT_RETENTION_DAYS: "90"
+  ATTEMPT_ARCHIVE_DAYS: "400"
+  DEDUPE_RETENTION_DAYS: "400"
+  PROVIDER_RETRY_WINDOW_DAYS: "30"
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability:4318

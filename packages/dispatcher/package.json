@@ -1,0 +1,10 @@
+{
+  "name": "@gym/dispatcher",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "dev:relay": "tsx watch src/relay-main.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

@@ -58,3 +58,39 @@ export interface SendStatusChanged {
 export function zeroCounts(): StatusCounts {
   return Object.fromEntries(SEND_STATUSES.map((s) => [s, 0])) as StatusCounts;
 }
+
+export interface PlanRunBranch {
+  branchId: number;
+  audienceRows: number;
+  planned: number;
+  skippedOptOut: number;
+  notScheduled: number;
+  completedAt: string | null;
+}
+
+export interface PlanRun {
+  id: number;
+  campaignId: number;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  expectedRows: number;
+  processedRows: number;
+  error: string | null;
+  branches: PlanRunBranch[];
+}
+
+export interface BranchCapacity {
+  branchId: number;
+  audience: number;
+  optedOut: number;
+  eligible: number;
+  slots: number;
+  projectedPlanned: number;
+  projectedNotScheduled: number;
+}
+
+export interface CapacityReport {
+  campaignId: number;
+  source: 'snapshot' | 'live_members';
+  branches: BranchCapacity[];
+  totals: Omit<BranchCapacity, 'branchId'> & { unscheduledShare: number };
+}

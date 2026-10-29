@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: gym-sms
+resources:
+  - namespace.yaml
+  - config.yaml
+  - external-secrets.yaml
+  - migrate-job.yaml
+  - api.yaml
+  - dispatcher.yaml
+  - workers.yaml
+  - web.yaml
+  - ingress.yaml
+  - network-policies.yaml
+  - monitoring.yaml
+images:
+  # One server image (Dockerfile.api) for API, dispatcher, relay, workers; one for the dashboard.
+  - name: gym-sms-server
+    newName: registry.example.com/gym-sms/server
+    newTag: "REPLACE_WITH_RELEASE_SHA"
+  - name: gym-sms-web
+    newName: registry.example.com/gym-sms/web
+    newTag: "REPLACE_WITH_RELEASE_SHA"

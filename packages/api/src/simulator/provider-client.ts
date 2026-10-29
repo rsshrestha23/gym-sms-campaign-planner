@@ -17,6 +17,8 @@ export type DispatchOutcome = 'applied' | 'duplicate' | 'ignored' | 'rejected' |
 
 export interface DispatchReport {
   attempted: number;
+  /** HTTP retries after 429/5xx/network errors (not counted in attempted). */
+  retried: number;
   applied: number;
   duplicate: number;
   ignored: number;
@@ -25,6 +27,8 @@ export interface DispatchReport {
   maxInFlight: number;
   elapsedMs: number;
 }
+
+import { signRequest } from '../webhooks/signature-verifier';
 
 type FetchFn = typeof fetch;
 
@@ -62,16 +66,23 @@ export async function dispatchEvents(
     ratePerSecond,
     fetchFn = fetch,
     onProgress,
+    signingSecret,
+    retries = 4,
   }: {
     concurrency?: number;
     ratePerSecond?: number;
     fetchFn?: FetchFn;
     onProgress?: (done: number, total: number) => void;
+    /** Signs each request like the provider would (HMAC; see webhooks/signature-verifier). */
+    signingSecret?: string;
+    /** Retries on 429/5xx/network errors, honouring Retry-After, as a real provider does. */
+    retries?: number;
   } = {},
 ): Promise<DispatchReport> {
   const url = new URL(`${API_VERSION_PREFIX}/webhooks/provider`, baseUrl);
   const report: DispatchReport = {
     attempted: 0,
+    retried: 0,
     applied: 0,
     duplicate: 0,
     ignored: 0,
@@ -101,23 +112,39 @@ export async function dispatchEvents(
       inFlight++;
       report.maxInFlight = Math.max(report.maxInFlight, inFlight);
       report.attempted++;
-      let outcome: DispatchOutcome;
+      let outcome: DispatchOutcome = 'error';
       try {
-        const res = await fetchFn(url, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(payloads[index]),
-        });
-        const body = (await res.json().catch(() => ({}))) as { result?: string };
-        if (res.status === 200 && (body.result === 'applied' || body.result === 'duplicate' || body.result === 'ignored')) {
-          outcome = body.result;
-        } else if (res.status >= 400 && res.status < 500) {
-          outcome = 'rejected';
-        } else {
-          outcome = 'error';
+        for (let attempt = 0; ; attempt++) {
+          const raw = JSON.stringify(payloads[index]);
+          let status = 0;
+          let retryAfterMs = 0;
+          try {
+            const res = await fetchFn(url, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json', ...(signingSecret ? signRequest(raw, signingSecret) : {}) },
+              body: raw,
+            });
+            status = res.status;
+            retryAfterMs = Number(res.headers.get('retry-after') ?? 0) * 1000;
+            const body = (await res.json().catch(() => ({}))) as { result?: string };
+            if (status === 200 && (body.result === 'applied' || body.result === 'duplicate' || body.result === 'ignored')) {
+              outcome = body.result;
+              break;
+            }
+            if (status >= 400 && status < 500 && status !== 429) {
+              outcome = 'rejected';
+              break;
+            }
+          } catch {
+            status = 0; // network error: retryable
+          }
+          if (attempt >= retries) {
+            outcome = 'error';
+            break;
+          }
+          report.retried++;
+          await new Promise((r) => setTimeout(r, Math.max(retryAfterMs, 100 * 2 ** attempt)));
         }
-      } catch {
-        outcome = 'error';
       } finally {
         inFlight--;
       }

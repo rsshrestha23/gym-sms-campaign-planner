@@ -1,4 +1,5 @@
 import type { Response } from 'express';
+import { sseClients } from '../observability/metrics';
 import type { SendStatusChanged, SendUpdatePublisher } from './events';
 
 /**
@@ -9,7 +10,11 @@ export class SseHub implements SendUpdatePublisher {
   private readonly clients = new Map<number, Set<Response>>();
   private readonly heartbeat: NodeJS.Timeout;
 
-  constructor(heartbeatMs = 15_000) {
+  /**
+   * @param maxBufferedBytes a client that can't keep up (its socket buffer grows past this) is
+   *   disconnected rather than buffered without bound; it reconnects and reconciles from a snapshot.
+   */
+  constructor(heartbeatMs = 15_000, private readonly maxBufferedBytes = 1 << 20) {
     this.heartbeat = setInterval(() => this.broadcastRaw(': heartbeat\n\n'), heartbeatMs);
     this.heartbeat.unref();
   }
@@ -18,8 +23,13 @@ export class SseHub implements SendUpdatePublisher {
     let set = this.clients.get(campaignId);
     if (!set) this.clients.set(campaignId, (set = new Set()));
     set.add(res);
+    sseClients.inc();
+    let removed = false;
     return () => {
+      if (removed) return;
+      removed = true;
       set!.delete(res);
+      sseClients.dec();
       if (set!.size === 0) this.clients.delete(campaignId);
     };
   }
@@ -35,7 +45,7 @@ export class SseHub implements SendUpdatePublisher {
     const set = this.clients.get(update.campaignId);
     if (!set) return;
     const frame = `event: send.updated\ndata: ${JSON.stringify(update)}\n\n`;
-    for (const res of set) res.write(frame);
+    for (const res of set) this.write(res, frame);
   }
 
   close(): void {
@@ -45,6 +55,14 @@ export class SseHub implements SendUpdatePublisher {
   }
 
   private broadcastRaw(frame: string): void {
-    for (const set of this.clients.values()) for (const res of set) res.write(frame);
+    for (const set of this.clients.values()) for (const res of set) this.write(res, frame);
+  }
+
+  private write(res: Response, frame: string): void {
+    if (res.writableLength > this.maxBufferedBytes) {
+      res.end(); // slow consumer: drop it; 'close' unsubscribes it
+      return;
+    }
+    res.write(frame);
   }
 }

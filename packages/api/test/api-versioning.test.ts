@@ -72,9 +72,9 @@ describe('API versioning', () => {
       expect(res.status, path).toBe(404);
       expect(res.body).toMatchObject({ error: 'unsupported_api_version', supportedVersions: ['v1'] });
     }
-    const { rows } = await pool.query(`SELECT count(*)::int AS n FROM webhook_receipts WHERE convert_from(raw_body, 'UTF8') LIKE '%v2-event%'`);
+    const { rows } = await pool.query(`SELECT count(*)::int AS n FROM provider_event_receipts WHERE convert_from(raw_body, 'UTF8') LIKE '%v2-event%'`);
     await webhook('/v2/webhooks/provider', 'v2-event', 1).expect(404);
-    const after = await pool.query(`SELECT count(*)::int AS n FROM webhook_receipts WHERE convert_from(raw_body, 'UTF8') LIKE '%v2-event%'`);
+    const after = await pool.query(`SELECT count(*)::int AS n FROM provider_event_receipts WHERE convert_from(raw_body, 'UTF8') LIKE '%v2-event%'`);
     expect(after.rows[0].n).toBe(rows[0].n);
   });
 

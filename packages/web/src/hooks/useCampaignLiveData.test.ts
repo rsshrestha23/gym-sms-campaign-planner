@@ -223,4 +223,77 @@ describe('useCampaignLiveData', () => {
     unmount();
     expect(t.es().closed).toBe(true);
   });
+
+  it('switches to server mode for large campaigns: bounded filtered pages and projection counts', async () => {
+    const big: CampaignSummary = {
+      ...summary,
+      totals: { ...zeroCounts(), planned: 50_000, total: 50_000 },
+      branches: summary.branches.map((b) => ({ ...b, counts: { ...zeroCounts(), planned: 25_000 }, total: 25_000 })),
+    };
+    const requested: unknown[] = [];
+    let summaries = 0;
+    const api: CampaignApi = {
+      eventsUrl: () => '/e',
+      getSummary: async () => {
+        summaries++;
+        return summaries > 1 ? { ...big, branches: big.branches.map((b) => ({ ...b, counts: { ...b.counts, planned: 24_999, delivered: 1 } })) } : big;
+      },
+      getSendsPage: async (_id, cursor, _signal, filters) => {
+        requested.push({ cursor, filters });
+        const start = cursor ? Number(cursor) : 0;
+        return { items: [send(start + 1, filters?.branchId ?? 1), send(start + 2, filters?.branchId ?? 1)], nextCursor: String(start + 2) };
+      },
+      plan: async () => ({ ...summary, created: true }),
+    };
+    FakeEventSource.instances = [];
+    const flushes: (() => void)[] = [];
+    const { result, rerender } = renderHook(({ f }) =>
+      useCampaignLiveData(1, f, {
+        api,
+        createEventSource: (url) => new FakeEventSource(url, []),
+        scheduleFlush: (fn) => void flushes.push(fn),
+        snapshotLimit: 4,
+        summaryRefreshMs: 20,
+      }), { initialProps: { f: { branchId: null as number | null, status: null } } });
+    act(() => FakeEventSource.instances[0].emit('ready', {}));
+    await waitFor(() => expect(result.current.mode).toBe('server'));
+    act(() => flushes.splice(0).forEach((fn) => fn()));
+    expect(result.current.rows).toHaveLength(4);
+    expect(result.current.truncated).toBe(true);
+    // Counts follow the projection, refreshed on an interval rather than derived from loaded rows.
+    await waitFor(() => expect(result.current.counts[1]).toMatchObject({ planned: 24_999, delivered: 1 }));
+
+    // Filters are applied server-side in this mode.
+    requested.length = 0;
+    rerender({ f: { branchId: 2, status: null } });
+    await waitFor(() => expect(requested[0]).toEqual({ cursor: null, filters: { branchId: 2, status: null } }));
+  });
+
+  it('plans asynchronously and reports run progress until completion', async () => {
+    const t = setup([[send(1, 1)]]);
+    let polls = 0;
+    const api = t.deps.api!;
+    api.planAsync = async () => ({ planRunId: 7, status: 'queued' });
+    api.getPlanRun = async () => {
+      polls++;
+      return {
+        id: 7, campaignId: 1, status: polls < 3 ? 'running' : 'completed', expectedRows: 10, processedRows: polls * 4, error: null,
+        branches: [{ branchId: 1, audienceRows: 10, planned: polls * 4, skippedOptOut: 0, notScheduled: 0, completedAt: null }],
+      };
+    };
+    const { result } = renderHook(() => useCampaignLiveData(1, ALL, { ...t.deps, planPollMs: 5 }));
+    act(() => t.es().emit('ready', {}));
+    await t.releaseNext();
+    const seen: number[] = [];
+    let done = false;
+    act(() => void result.current.plan().then(() => (done = true)));
+    await waitFor(() => {
+      if (result.current.planRun) seen.push(result.current.planRun.processedRows);
+      expect(done).toBe(true);
+    });
+    expect(polls).toBe(3);
+    expect(result.current.planRun).toBeNull();
+    expect(result.current.error).toBeNull();
+    await waitFor(() => expect(t.pageRequests.length).toBe(1)); // reloads the snapshot afterwards
+  });
 });

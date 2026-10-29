@@ -12,7 +12,7 @@
     "resolveJsonModule": true,
     "noUnusedLocals": true,
     "noFallthroughCasesInSwitch": true,
-    "rootDir": ".",
+    "rootDir": "..",
     "outDir": "dist"
   },
   "include": ["src", "test"]

@@ -1,0 +1,42 @@
+# Default deny; then only the flows the system needs. Managed PostgreSQL/Redis and the SMS
+# vendor are reached via egress on their ports (narrow with ipBlock CIDRs once known).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: default-deny }
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-ingress-to-api-web }
+spec:
+  podSelector: { matchExpressions: [{ key: app.kubernetes.io/name, operator: In, values: [api, web] }] }
+  ingress:
+    - from: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } } }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-metrics-scrape }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/part-of: gym-sms } }
+  ingress:
+    - from: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: monitoring } } }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-egress-backends }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/part-of: gym-sms } }
+  egress:
+    - ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]   # DNS
+    - ports: [{ port: 5432 }, { port: 6379 }, { port: 6380 }]            # managed PostgreSQL / Redis (TLS)
+    - ports: [{ port: 4318 }]                                            # OTLP collector
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-worker-egress-provider }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: sms-worker } }
+  egress:
+    - ports: [{ port: 443 }]   # SMS vendor API only; nothing else talks to the internet

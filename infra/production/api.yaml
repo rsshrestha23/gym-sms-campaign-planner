@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  labels: { app.kubernetes.io/name: api, app.kubernetes.io/part-of: gym-sms }
+spec:
+  replicas: 3
+  strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
+  selector: { matchLabels: { app.kubernetes.io/name: api } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: api, app.kubernetes.io/part-of: gym-sms }
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "3000", prometheus.io/path: /metrics }
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, seccompProfile: { type: RuntimeDefault } }
+      topologySpreadConstraints:
+        - { maxSkew: 1, topologyKey: topology.kubernetes.io/zone, whenUnsatisfiable: ScheduleAnyway, labelSelector: { matchLabels: { app.kubernetes.io/name: api } } }
+      containers:
+        - name: api
+          image: gym-sms-server
+          command: ["node", "build/api/src/server.js"]
+          ports: [{ name: http, containerPort: 3000 }]
+          envFrom: [{ configMapRef: { name: gym-sms-config } }]
+          env:
+            - { name: DATABASE_URL_FILE, value: /secrets/database-url }
+            - { name: REDIS_URL_FILE, value: /secrets/redis-url }
+            - { name: WEBHOOK_SIGNING_SECRETS_FILE, value: /secrets/webhook-signing-secrets }
+            - { name: ADMIN_API_TOKEN_FILE, value: /secrets/admin-api-token }
+            - { name: OTEL_SERVICE_NAME, value: gym-sms-api }
+          volumeMounts: [{ name: secrets, mountPath: /secrets, readOnly: true }]
+          # Liveness never depends on PostgreSQL/Redis/provider; readiness does.
+          livenessProbe: { httpGet: { path: /health/live, port: http }, periodSeconds: 10, failureThreshold: 3 }
+          readinessProbe: { httpGet: { path: /health/ready, port: http }, periodSeconds: 5, failureThreshold: 2 }
+          startupProbe: { httpGet: { path: /health/live, port: http }, periodSeconds: 2, failureThreshold: 30 }
+          lifecycle:
+            preStop: { exec: { command: ["sleep", "5"] } }   # let the load balancer drain first
+          resources:
+            requests: { cpu: 250m, memory: 256Mi }
+            limits: { memory: 768Mi }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+      volumes:
+        - name: secrets
+          secret: { secretName: gym-sms-secrets }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: api }
+spec:
+  selector: { app.kubernetes.io/name: api }
+  ports: [{ name: http, port: 80, targetPort: http }]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: api }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: api }
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 65 } }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: api }
+spec:
+  minAvailable: 2
+  selector: { matchLabels: { app.kubernetes.io/name: api } }

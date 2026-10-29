@@ -1,0 +1,85 @@
+# Due-send dispatcher (SKIP LOCKED batches; reconciliation/maintenance behind advisory locks) and
+# the outbox relay (leased). Both are safe with >1 replica; 2 each for availability.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dispatcher
+  labels: { app.kubernetes.io/name: dispatcher, app.kubernetes.io/part-of: gym-sms }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app.kubernetes.io/name: dispatcher } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: dispatcher, app.kubernetes.io/part-of: gym-sms }
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "9465" }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: dispatcher
+          image: gym-sms-server
+          command: ["node", "build/dispatcher/src/main.js"]
+          ports: [{ name: metrics, containerPort: 9465 }]
+          envFrom: [{ configMapRef: { name: gym-sms-config } }]
+          env:
+            - { name: DATABASE_URL_FILE, value: /secrets/database-url }
+            - { name: REDIS_URL_FILE, value: /secrets/redis-url }
+            - { name: OTEL_SERVICE_NAME, value: gym-sms-dispatcher }
+          volumeMounts: [{ name: secrets, mountPath: /secrets, readOnly: true }]
+          livenessProbe: { httpGet: { path: /health/live, port: metrics }, periodSeconds: 15 }
+          readinessProbe: { httpGet: { path: /health/ready, port: metrics }, periodSeconds: 10 }
+          resources:
+            requests: { cpu: 100m, memory: 192Mi }
+            limits: { memory: 512Mi }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+      volumes:
+        - name: secrets
+          secret: { secretName: gym-sms-secrets }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: outbox-relay
+  labels: { app.kubernetes.io/name: outbox-relay, app.kubernetes.io/part-of: gym-sms }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app.kubernetes.io/name: outbox-relay } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: outbox-relay, app.kubernetes.io/part-of: gym-sms }
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "9466" }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: relay
+          image: gym-sms-server
+          command: ["node", "build/dispatcher/src/relay-main.js"]
+          ports: [{ name: metrics, containerPort: 9466 }]
+          envFrom: [{ configMapRef: { name: gym-sms-config } }]
+          env:
+            - { name: DATABASE_URL_FILE, value: /secrets/database-url }
+            - { name: REDIS_URL_FILE, value: /secrets/redis-url }
+            - { name: OTEL_SERVICE_NAME, value: gym-sms-outbox-relay }
+          volumeMounts: [{ name: secrets, mountPath: /secrets, readOnly: true }]
+          livenessProbe: { httpGet: { path: /health/live, port: metrics }, periodSeconds: 15 }
+          readinessProbe: { httpGet: { path: /health/ready, port: metrics }, periodSeconds: 10 }
+          resources:
+            requests: { cpu: 100m, memory: 192Mi }
+            limits: { memory: 512Mi }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+      volumes:
+        - name: secrets
+          secret: { secretName: gym-sms-secrets }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: dispatcher }
+spec:
+  minAvailable: 1
+  selector: { matchLabels: { app.kubernetes.io/name: dispatcher } }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: outbox-relay }
+spec:
+  minAvailable: 1
+  selector: { matchLabels: { app.kubernetes.io/name: outbox-relay } }

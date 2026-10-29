@@ -1,0 +1,41 @@
+# Two hosts:
+#  - webhooks.<domain>: public, provider callbacks only (signature-verified by the API; WAF
+#    allow-list of provider IP ranges and global rate limiting in front).
+#  - campaigns.<domain>: dashboard + read API + SSE, behind SSO (oauth2-proxy) — member PII.
+# /metrics and /v1/admin are not routed publicly at all; operators use port-forward or an
+# internal-only ingress.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: webhooks
+  annotations:
+    nginx.ingress.kubernetes.io/limit-rps: "200"
+    nginx.ingress.kubernetes.io/proxy-body-size: 64k
+spec:
+  ingressClassName: nginx
+  tls: [{ hosts: [webhooks.example.com], secretName: webhooks-tls }]
+  rules:
+    - host: webhooks.example.com
+      http:
+        paths:
+          - { path: /v1/webhooks/provider, pathType: Exact, backend: { service: { name: api, port: { name: http } } } }
+          - { path: /webhooks/provider, pathType: Exact, backend: { service: { name: api, port: { name: http } } } }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dashboard
+  annotations:
+    nginx.ingress.kubernetes.io/auth-url: "https://auth.example.com/oauth2/auth"
+    nginx.ingress.kubernetes.io/auth-signin: "https://auth.example.com/oauth2/start?rd=$scheme://$host$escaped_request_uri"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"      # SSE
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"  # SSE
+spec:
+  ingressClassName: nginx
+  tls: [{ hosts: [campaigns.example.com], secretName: campaigns-tls }]
+  rules:
+    - host: campaigns.example.com
+      http:
+        paths:
+          - { path: /v1/campaigns, pathType: Prefix, backend: { service: { name: api, port: { name: http } } } }
+          - { path: /, pathType: Prefix, backend: { service: { name: web, port: { name: http } } } }

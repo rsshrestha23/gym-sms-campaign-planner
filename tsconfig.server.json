@@ -1,0 +1,9 @@
+{
+  "extends": "./packages/api/tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "packages",
+    "outDir": "build",
+    "noEmit": false
+  },
+  "include": ["packages/api/src", "packages/dispatcher/src", "packages/workers/src"]
+}

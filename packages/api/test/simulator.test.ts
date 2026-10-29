@@ -124,7 +124,7 @@ describe('dispatchEvents', () => {
     }
   });
 
-  it('counts 4xx as rejected and 5xx/network failures as errors', async () => {
+  it('counts 4xx as rejected and 5xx/network failures as errors once retries run out', async () => {
     let n = 0;
     const { server, url } = await listen((req, res) => {
       req.resume();
@@ -132,8 +132,37 @@ describe('dispatchEvents', () => {
       res.end('{}');
     });
     try {
-      const report = await dispatchEvents(url, generateBatch(fakeSends(2)).events, { concurrency: 1 });
+      const report = await dispatchEvents(url, generateBatch(fakeSends(2)).events, { concurrency: 1, retries: 0 });
       expect(report).toMatchObject({ attempted: 4, rejected: 2, error: 2 });
+    } finally {
+      server.close();
+    }
+  });
+
+  it('retries 429/503 like a provider, honouring Retry-After, and signs every request', async () => {
+    const seen: { sig?: string; ts?: string }[] = [];
+    let n = 0;
+    const { server, url } = await listen((req, res) => {
+      seen.push({ sig: req.headers['x-provider-signature'] as string, ts: req.headers['x-provider-timestamp'] as string });
+      req.resume();
+      const call = n++;
+      if (call === 0) {
+        res.writeHead(429, { 'retry-after': '1' });
+        return res.end('{}');
+      }
+      if (call === 1) {
+        res.statusCode = 503;
+        return res.end('{}');
+      }
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ result: 'applied' }));
+    });
+    try {
+      const started = Date.now();
+      const report = await dispatchEvents(url, generateBatch(fakeSends(1)).events.slice(0, 1), { concurrency: 1, signingSecret: 's3cret' });
+      expect(report).toMatchObject({ attempted: 1, applied: 1, retried: 2, error: 0 });
+      expect(Date.now() - started).toBeGreaterThanOrEqual(1000);
+      expect(seen.every((h) => /^v1=[0-9a-f]{64}$/.test(h.sig ?? '') && /^\d+$/.test(h.ts ?? ''))).toBe(true);
     } finally {
       server.close();
     }
@@ -141,8 +170,9 @@ describe('dispatchEvents', () => {
 
   it('parses CLI flags', () => {
     expect(parseArgs(['--rate', '25'], { API_BASE_URL: 'http://api:3000' })).toMatchObject({
-      baseUrl: 'http://api:3000', ratePerSecond: 25, concurrency: 50, campaignId: 1,
+      baseUrl: 'http://api:3000', ratePerSecond: 25, concurrency: 50, campaignId: 1, signingSecret: 'dev-only-webhook-secret',
     });
+    expect(parseArgs([], { WEBHOOK_SIGNING_SECRET: 'other' }).signingSecret).toBe('other');
     expect(parseArgs(['--rate=10', '--concurrency=5'], {})).toMatchObject({ ratePerSecond: 10, concurrency: 5 });
     expect(() => parseArgs(['--rate', '0'], {})).toThrow();
     expect(() => parseArgs(['--nope'], {})).toThrow();
@@ -176,8 +206,8 @@ describe('simulate end to end', () => {
     expect(report.applied + report.ignored).toBe(9280);
     expect(report.duplicate).toBe(batch.requests.length - 9280);
 
-    expect(await count(pool, 'SELECT count(*) AS n FROM webhook_receipts')).toBe(batch.requests.length);
-    expect(await count(pool, 'SELECT count(*) AS n FROM provider_events')).toBe(9280);
+    expect(await count(pool, 'SELECT count(*) AS n FROM provider_event_receipts')).toBe(batch.requests.length);
+    expect(await count(pool, 'SELECT count(*) AS n FROM provider_event_applications')).toBe(9280);
     const { rows } = await pool.query(`SELECT status, count(*)::int AS n FROM sends GROUP BY status ORDER BY status`);
     expect(Object.fromEntries(rows.map((r) => [r.status, r.n]))).toEqual({
       delivered: 3944, undelivered: 464, failed: 232, not_scheduled: 120, skipped_opt_out: 240,

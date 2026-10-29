@@ -134,3 +134,8 @@ select {
 .badge-skipped_opt_out, .dot-skipped_opt_out { --c: var(--skipped_opt_out); }
 .badge-not_scheduled, .dot-not_scheduled { --c: var(--not_scheduled); }
 .dot { background: var(--c); }
+
+.capacity { margin: 0; font-size: 0.82rem; color: var(--muted); }
+.capacity.over { color: var(--undelivered); }
+.plan-progress { margin: 0; font-size: 0.85rem; }
+.truncated { margin: 0; padding: 10px 16px; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85rem; }

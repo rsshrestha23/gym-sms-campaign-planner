@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import { BranchSummary as BranchSummaryData, SEND_STATUSES, StatusCounts } from '../api/types';
+import { BranchCapacity, BranchSummary as BranchSummaryData, PlanRunBranch, SEND_STATUSES, StatusCounts } from '../api/types';
 import { formatInZone, STATUS_LABELS } from '../lib/format';
 
 interface Props {
@@ -8,9 +8,21 @@ interface Props {
   viewerZone: string;
   selected: boolean;
   onSelect: (branchId: number | null) => void;
+  /** Slots vs eligible members for the campaign window (from /capacity). */
+  capacity?: BranchCapacity;
+  /** Present while a plan run is in progress. */
+  planProgress?: PlanRunBranch;
 }
 
-export const BranchSummary = memo(function BranchSummary({ branch, counts, viewerZone, selected, onSelect }: Props) {
+export const BranchSummary = memo(function BranchSummary({
+  branch,
+  counts,
+  viewerZone,
+  selected,
+  onSelect,
+  capacity,
+  planProgress,
+}: Props) {
   const c = counts ?? branch.counts;
   const total = SEND_STATUSES.reduce((sum, s) => sum + c[s], 0);
   const finished = c.delivered + c.undelivered + c.failed;
@@ -27,6 +39,13 @@ export const BranchSummary = memo(function BranchSummary({ branch, counts, viewe
           {selected ? 'Show all' : 'Filter'}
         </button>
       </header>
+
+      {planProgress && (
+        <p className="muted plan-progress">
+          Planning… {(planProgress.planned + planProgress.skippedOptOut + planProgress.notScheduled).toLocaleString()} /{' '}
+          {planProgress.audienceRows.toLocaleString()} members
+        </p>
+      )}
 
       <div className="progress" role="img" aria-label={`${finished} of ${scheduled} scheduled sends finished`}>
         {(['delivered', 'undelivered', 'failed', 'sent'] as const).map((s) =>
@@ -49,6 +68,16 @@ export const BranchSummary = memo(function BranchSummary({ branch, counts, viewe
           <dd>{total.toLocaleString()}</dd>
         </div>
       </dl>
+
+      {capacity && (
+        <p className={`capacity${capacity.projectedNotScheduled ? ' over' : ''}`}>
+          {capacity.slots.toLocaleString()} slots for {capacity.eligible.toLocaleString()} eligible members
+          {capacity.projectedNotScheduled > 0 &&
+            ` · ${capacity.projectedNotScheduled.toLocaleString()} won't fit (${Math.round(
+              (capacity.projectedNotScheduled / Math.max(capacity.eligible, 1)) * 100,
+            )}%)`}
+        </p>
+      )}
 
       <table className="window">
         <thead>

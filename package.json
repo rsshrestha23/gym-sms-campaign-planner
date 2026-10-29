@@ -5,14 +5,16 @@
   "description": "Gym win-back SMS campaign planner with idempotent provider webhooks and a live dashboard",
   "workspaces": [
     "packages/api",
+    "packages/dispatcher",
+    "packages/workers",
     "packages/web"
   ],
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "build": "npm run build -w @gym/api && npm run build -w @gym/web",
-    "typecheck": "npm run typecheck -w @gym/api && npm run typecheck -w @gym/web",
+    "build": "npm run build:server && npm run build -w @gym/web",
+    "typecheck": "tsc -p packages/api/tsconfig.json --noEmit && tsc -p packages/dispatcher/tsconfig.json --noEmit && tsc -p packages/workers/tsconfig.json --noEmit && npm run typecheck -w @gym/web",
     "test": "vitest run",
     "test:watch": "vitest",
     "dev:api": "npm run dev -w @gym/api",
@@ -20,10 +22,15 @@
     "migrate": "npm run migrate -w @gym/api",
     "seed": "npm run seed -w @gym/api",
     "reset": "npm run reset -w @gym/api",
-    "simulate": "npm run simulate -w @gym/api --"
+    "simulate": "npm run simulate -w @gym/api --",
+    "build:server": "tsc -p tsconfig.server.json && node -e \"require('fs').cpSync('packages/api/src/db/migrations','build/api/src/db/migrations',{recursive:true})\"",
+    "demo:live": "npm run demo:live -w @gym/api --",
+    "load:plan": "npm run load:plan -w @gym/api --",
+    "load:dispatch": "npm run load:dispatch -w @gym/workers --"
   },
   "devDependencies": {
     "@testcontainers/postgresql": "^12.2.1",
+    "@testcontainers/redis": "^12.2.1",
     "testcontainers": "^12.2.1",
     "vitest": "^3.2.7"
   }

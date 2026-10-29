@@ -1,0 +1,29 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gym-sms-migrate
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: migrate
+          image: gym-sms-server
+          command: ["node", "-e", "require('./build/api/src/db/migrate').migrate(require('./build/api/src/db/pool').createPool(require('fs').readFileSync(process.env.DATABASE_URL_FILE,'utf8').trim(),1)).then(r=>{console.log(JSON.stringify({ran:r}));process.exit(0)},e=>{console.error(e);process.exit(1)})"]
+          env:
+            - { name: DATABASE_URL_FILE, value: /secrets/migrate-database-url }
+          volumeMounts:
+            - { name: secrets, mountPath: /secrets, readOnly: true }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
+      volumes:
+        - name: secrets
+          secret: { secretName: gym-sms-secrets }

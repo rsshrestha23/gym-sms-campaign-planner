@@ -61,7 +61,11 @@ export async function seed(pool: Pool): Promise<SeedResult> {
 /** Explicit destructive path: removes all app rows in FK-safe order and restarts identities. */
 export async function resetDatabase(pool: Pool): Promise<void> {
   await pool.query(
-    `TRUNCATE provider_events, webhook_receipts, sends, campaign_branches, campaigns, members, branches
+    `TRUNCATE provider_events, webhook_receipts, provider_event_applications, provider_event_receipts,
+              status_event_outbox, send_outbox, send_attempts, send_attempts_archive,
+              campaign_branch_status_counts, sends, campaign_plan_run_branches, campaign_plan_runs,
+              campaign_audience_members, campaign_audience_versions,
+              campaign_branches, campaigns, members, branches
      RESTART IDENTITY`,
   );
 }

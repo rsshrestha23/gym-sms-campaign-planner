@@ -7,7 +7,12 @@ export interface SimulateOptions {
   concurrency: number;
   ratePerSecond?: number;
   seed: number;
+  /** HMAC secret the "provider" signs with; must be one of the API's WEBHOOK_SIGNING_SECRETS. */
+  signingSecret?: string;
 }
+
+/** The secret docker-compose configures for local development; never a production value. */
+export const DEV_WEBHOOK_SECRET = 'dev-only-webhook-secret';
 
 export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env): SimulateOptions {
   const options: SimulateOptions = {
@@ -15,6 +20,7 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
     campaignId: 1,
     concurrency: 50,
     seed: DEFAULT_SEED,
+    signingSecret: env.WEBHOOK_SIGNING_SECRET ?? DEV_WEBHOOK_SECRET,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -69,6 +75,7 @@ export async function simulate(options: SimulateOptions, log: (line: string) => 
   const report = await dispatchEvents(options.baseUrl, batch.requests, {
     concurrency: options.concurrency,
     ratePerSecond: options.ratePerSecond,
+    signingSecret: options.signingSecret,
     onProgress: (done, total) => {
       const now = Date.now();
       if (now - lastLogged > 1000 || done === total) {
@@ -80,7 +87,7 @@ export async function simulate(options: SimulateOptions, log: (line: string) => 
   log(
     `Done in ${(report.elapsedMs / 1000).toFixed(1)}s: attempted ${report.attempted}, applied ${report.applied}, ` +
       `duplicate ${report.duplicate}, ignored ${report.ignored}, rejected ${report.rejected}, ` +
-      `error ${report.error}, max in flight ${report.maxInFlight}`,
+      `error ${report.error}, http retries ${report.retried}, max in flight ${report.maxInFlight}`,
   );
   return { sends, batch, report };
 }

@@ -1,0 +1,11 @@
+{
+  "name": "@gym/workers",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "mock-provider": "tsx src/providers/mock-provider-server.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "load:dispatch": "tsx test/load/dispatch-throughput.ts"
+  }
+}

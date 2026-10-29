@@ -8,12 +8,14 @@ interface Props {
   rows: SendItem[];
   branches: Map<number, { name: string; timeZone: string }>;
   viewerZone: string;
+  /** More sends match than were loaded (large campaigns load a bounded, server-filtered window). */
+  truncated?: boolean;
 }
 
 const ROW_HEIGHT = 44;
 
 /** Renders only the visible window of the (up to 5,000-row) snapshot. */
-export function SendsTable({ rows, branches, viewerZone }: Props) {
+export function SendsTable({ rows, branches, viewerZone, truncated = false }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -54,6 +56,12 @@ export function SendsTable({ rows, branches, viewerZone }: Props) {
           </div>
         )}
       </div>
+      {truncated && (
+        <p className="truncated" role="status">
+          Showing the first {rows.length.toLocaleString()} matching sends. Narrow the branch or status filter to see others;
+          counts above cover the whole campaign.
+        </p>
+      )}
     </div>
   );
 }

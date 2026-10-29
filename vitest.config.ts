@@ -8,9 +8,10 @@ export default defineConfig({
     projects: [
       {
         test: {
+          // API, dispatcher, and worker tests share the PostgreSQL + Redis containers.
           name: 'api',
           root: './packages/api',
-          include: ['test/**/*.test.ts'],
+          include: ['test/**/*.test.ts', '../dispatcher/test/**/*.test.ts', '../workers/test/**/*.test.ts'],
           environment: 'node',
           // One isolated Testcontainers PostgreSQL instance for the whole run.
           globalSetup: ['./test/global-setup.ts'],

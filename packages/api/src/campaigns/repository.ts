@@ -1,7 +1,7 @@
 import { Pool } from 'pg';
-import { withTransaction } from '../db/pool';
 import { SEND_STATUSES, SendStatus } from '../sends/status-transition';
-import { planBranch } from './planner';
+import { PlanRunCampaignNotFound } from './plan-run-repository';
+import { ProductionPlanner } from './production-planner';
 
 export type StatusCounts = Record<SendStatus, number>;
 
@@ -59,80 +59,25 @@ export function zeroCounts(): StatusCounts {
 }
 
 export class CampaignRepository {
-  constructor(private readonly pool: Pool) {}
+  readonly planner: ProductionPlanner;
+
+  constructor(readonly pool: Pool, planner?: ProductionPlanner) {
+    this.planner = planner ?? new ProductionPlanner(pool);
+  }
 
   /**
-   * Plans the campaign at most once. The campaign row lock serializes concurrent callers; the
-   * first commits every send row and planned_at together, later callers see planned_at and
-   * return the persisted plan untouched. Unique keys on (campaign, member) and
-   * (campaign, branch, slot) are the final guards.
+   * Plans the campaign at most once and waits for the plan to finish. Delegates to the resumable
+   * production planner: concurrent callers share one plan run, and a repeat returns the persisted,
+   * immutable plan.
    */
   async plan(campaignId: number): Promise<PlanResult> {
-    const created = await withTransaction(this.pool, async (client) => {
-      const { rows: campaigns } = await client.query<{
-        start_date: string;
-        end_date: string;
-        planned_at: Date | null;
-      }>('SELECT start_date, end_date, planned_at FROM campaigns WHERE id = $1 FOR UPDATE', [campaignId]);
-      const campaign = campaigns[0];
-      if (!campaign) throw new CampaignNotFoundError(campaignId);
-      if (campaign.planned_at) return false;
-
-      // One statement, so one consistent membership snapshot across every branch.
-      const { rows: members } = await client.query<{
-        branch_id: number;
-        time_zone: string;
-        member_id: number;
-        sms_opt_out: boolean;
-      }>(
-        `SELECT b.id AS branch_id, b.time_zone, m.id AS member_id, m.sms_opt_out
-           FROM campaign_branches cb
-           JOIN branches b ON b.id = cb.branch_id
-           JOIN members m ON m.branch_id = b.id
-          WHERE cb.campaign_id = $1
-          ORDER BY b.id, m.id`,
-        [campaignId],
-      );
-
-      const byBranch = new Map<number, { timeZone: string; members: { id: number; smsOptOut: boolean }[] }>();
-      for (const row of members) {
-        let branch = byBranch.get(row.branch_id);
-        if (!branch) byBranch.set(row.branch_id, (branch = { timeZone: row.time_zone, members: [] }));
-        branch.members.push({ id: row.member_id, smsOptOut: row.sms_opt_out });
-      }
-
-      const branchIds: number[] = [];
-      const memberIds: number[] = [];
-      const statuses: string[] = [];
-      const scheduled: (string | null)[] = [];
-      for (const [branchId, branch] of byBranch) {
-        for (const send of planBranch({
-          members: branch.members,
-          timeZone: branch.timeZone,
-          startDate: campaign.start_date,
-          endDate: campaign.end_date,
-        })) {
-          branchIds.push(branchId);
-          memberIds.push(send.memberId);
-          statuses.push(send.status);
-          scheduled.push(send.scheduledAt);
-        }
-      }
-
-      await client.query(
-        `INSERT INTO sends (campaign_id, branch_id, member_id, status, scheduled_at)
-         SELECT $1, branch_id, member_id, status, scheduled_at
-           FROM unnest($2::int[], $3::int[], $4::text[], $5::timestamptz[])
-                WITH ORDINALITY AS t(branch_id, member_id, status, scheduled_at, ord)
-          ORDER BY ord`,
-        [campaignId, branchIds, memberIds, statuses, scheduled],
-      );
-      await client.query('UPDATE campaigns SET planned_at = now() WHERE id = $1', [campaignId]);
-      return true;
-    });
-
-    const summary = await this.summary(campaignId);
-    return { created, summary: summary! };
+    try {
+      const { created } = await this.planner.planAndWait(campaignId);
+      return { created, summary: (await this.summary(campaignId))! };
+    } catch (err) {
+      if (err instanceof PlanRunCampaignNotFound) throw new CampaignNotFoundError(campaignId);
+      throw err;
+    }
   }
 
   async summary(campaignId: number): Promise<CampaignSummary | null> {
@@ -146,6 +91,8 @@ export class CampaignRepository {
     const campaign = campaigns[0];
     if (!campaign) return null;
 
+    // Counts come from the transactional projection (O(branches × statuses) rows); first/last
+    // slots are two index probes per branch on the (campaign, branch, scheduled_at) slot index.
     const [branchRows, countRows] = await Promise.all([
       this.pool.query<{
         id: number;
@@ -154,18 +101,19 @@ export class CampaignRepository {
         earliest: Date | null;
         latest: Date | null;
       }>(
-        `SELECT b.id, b.name, b.time_zone, min(s.scheduled_at) AS earliest, max(s.scheduled_at) AS latest
+        `SELECT b.id, b.name, b.time_zone,
+                (SELECT min(s.scheduled_at) FROM sends s
+                  WHERE s.campaign_id = cb.campaign_id AND s.branch_id = b.id AND s.scheduled_at IS NOT NULL) AS earliest,
+                (SELECT max(s.scheduled_at) FROM sends s
+                  WHERE s.campaign_id = cb.campaign_id AND s.branch_id = b.id AND s.scheduled_at IS NOT NULL) AS latest
            FROM campaign_branches cb
            JOIN branches b ON b.id = cb.branch_id
-           LEFT JOIN sends s ON s.campaign_id = cb.campaign_id AND s.branch_id = b.id
           WHERE cb.campaign_id = $1
-          GROUP BY b.id
           ORDER BY b.id`,
         [campaignId],
       ),
       this.pool.query<{ branch_id: number; status: SendStatus; count: number }>(
-        `SELECT branch_id, status, count(*) AS count FROM sends
-          WHERE campaign_id = $1 GROUP BY branch_id, status`,
+        `SELECT branch_id, status, count FROM campaign_branch_status_counts WHERE campaign_id = $1 AND count <> 0`,
         [campaignId],
       ),
     ]);
