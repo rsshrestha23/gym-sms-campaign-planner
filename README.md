@@ -4,7 +4,7 @@ Plans the "Win-back October" SMS campaign for gym branches in each branch's loca
 
 - **API**: Node.js, TypeScript, Express, PostgreSQL (`packages/api`)
 - **Dispatcher and outbox relay**: due-send dispatch, Redis repair, retention (`packages/dispatcher`)
-- **Workers**: BullMQ send workers and provider adapters (`packages/workers`)
+- **Workers**: BullMQ send workers and provider adapters, with Twilio for production (`packages/workers`)
 - **Web**: React, TypeScript, Vite, SSE, virtualized table (`packages/web`)
 - **Tests**: Vitest, Supertest, Testcontainers (PostgreSQL and Redis)
 - **Deployment**: platform-neutral Kubernetes manifests (`infra/production`), [runbook](docs/production-runbook.md), and [capacity report](docs/production-capacity-report.md)
@@ -78,7 +78,8 @@ The API is versioned by URL path, and `/v1` is the current version. Timestamps a
 | `GET /campaigns/:id/summary` | Status counts per branch (from the transactional projection), plus first/last `scheduledAt` |
 | `GET /campaigns/:id/sends?branchId=&status=&cursor=&limit=` | Keyset pagination by send id. `limit` defaults to 100, max 1000 |
 | `GET /campaigns/:id/events` | SSE: a `ready` frame, then `send.updated` for each committed change (across all replicas) |
-| `POST /webhooks/provider` | Provider callback `{ eventId, sendId, status, occurredAt }`, signed with `X-Provider-Timestamp` + `X-Provider-Signature: v1=<hmac>` |
+| `POST /webhooks/provider` | Generic provider callback `{ eventId, sendId, status, occurredAt }`, signed with `X-Provider-Timestamp` + `X-Provider-Signature: v1=<hmac>` (simulator and mock provider) |
+| `POST /webhooks/twilio?sendId=` | Twilio status callback (form-encoded, `X-Twilio-Signature`); enabled when `TWILIO_AUTH_TOKENS` and `TWILIO_WEBHOOK_PUBLIC_BASE_URL` are set |
 
 Webhook responses: `200` applied, duplicate, ignored-stale, or unknown send; `400` malformed; `401` bad or stale signature; `429` rate limited; `503` transient failure, which the provider should retry. The raw body of every request that passes the rate limit is stored before any parsing.
 

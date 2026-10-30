@@ -191,6 +191,17 @@ export class ClaimService {
     return { kind: 'suppressed', reason, change };
   }
 
+  /**
+   * Provider says the recipient has unsubscribed (e.g. replied STOP; Twilio error 21610): record
+   * the opt-out so every other planned send to this member is suppressed at its own claim.
+   */
+  async recordProviderOptOut(sendId: number): Promise<void> {
+    await this.pool.query(
+      `UPDATE members SET sms_opt_out = true WHERE id = (SELECT member_id FROM sends WHERE id = $1) AND NOT sms_opt_out`,
+      [sendId],
+    );
+  }
+
   /** Extends the lease during a long provider call. False means the lease was lost. */
   async heartbeat(claim: Claim): Promise<boolean> {
     const { rowCount } = await this.pool.query(

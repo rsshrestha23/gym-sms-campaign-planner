@@ -27,6 +27,7 @@ spec:
             - { name: REDIS_URL_FILE, value: /secrets/redis-url }
             - { name: WEBHOOK_SIGNING_SECRETS_FILE, value: /secrets/webhook-signing-secrets }
             - { name: ADMIN_API_TOKEN_FILE, value: /secrets/admin-api-token }
+            - { name: TWILIO_AUTH_TOKENS_FILE, value: /secrets/twilio-auth-tokens }
             - { name: OTEL_SERVICE_NAME, value: gym-sms-api }
           volumeMounts: [{ name: secrets, mountPath: /secrets, readOnly: true }]
           # Liveness never depends on PostgreSQL/Redis/provider; readiness does.

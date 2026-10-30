@@ -24,6 +24,8 @@ function loadSigningKeys(): SigningKey[] {
 /** Startup order: (migrate), (demo seed), then listen. Safe to repeat. */
 async function main() {
   let signingKeys = loadSigningKeys();
+  // Twilio: primary auth token first, secondary during rotation (TWILIO_AUTH_TOKENS(_FILE)).
+  let twilioTokens = parseSigningKeys(readSecret('TWILIO_AUTH_TOKENS'));
   if (config.production && signingKeys.length === 0 && !config.webhookSignaturesDisabled) {
     throw new Error('WEBHOOK_SIGNING_SECRETS(_FILE) is required in production (or set WEBHOOK_SIGNATURES=disabled for a local demo)');
   }
@@ -69,6 +71,10 @@ async function main() {
       toleranceSec: config.webhookToleranceSec,
       rateLimit: config.webhookRateLimit,
     },
+    twilio:
+      twilioTokens.length && process.env.TWILIO_WEBHOOK_PUBLIC_BASE_URL
+        ? { authTokens: () => twilioTokens, publicBaseUrl: process.env.TWILIO_WEBHOOK_PUBLIC_BASE_URL.replace(/\/$/, '') }
+        : undefined,
     readinessChecks: redis ? [{ name: 'redis', check: () => redis!.ping() }] : [],
     adminToken: readSecret('ADMIN_API_TOKEN'),
     queueControl,
@@ -80,7 +86,8 @@ async function main() {
   // Secret rotation without restart: update the mounted secret, then send SIGHUP.
   process.on('SIGHUP', () => {
     signingKeys = loadSigningKeys();
-    log.info('webhook.signing_keys_reloaded', { keys: signingKeys.map((k) => k.id) });
+    twilioTokens = parseSigningKeys(readSecret('TWILIO_AUTH_TOKENS'));
+    log.info('webhook.signing_keys_reloaded', { keys: signingKeys.map((k) => k.id), twilio: twilioTokens.map((k) => k.id) });
   });
 
   const server = app.listen(config.port, config.host, () => {

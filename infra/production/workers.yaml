@@ -24,7 +24,7 @@ spec:
           env:
             - { name: DATABASE_URL_FILE, value: /secrets/database-url }
             - { name: REDIS_URL_FILE, value: /secrets/redis-url }
-            - { name: SMS_PROVIDER_API_KEY_FILE, value: /secrets/sms-provider-api-key }
+            - { name: TWILIO_API_KEY_SECRET_FILE, value: /secrets/twilio-api-key-secret }
             - { name: OTEL_SERVICE_NAME, value: gym-sms-worker }
           volumeMounts: [{ name: secrets, mountPath: /secrets, readOnly: true }]
           # Liveness must not fail because the SMS provider is down.
@@ -51,7 +51,7 @@ spec:
     - type: redis
       authenticationRef: { name: redis-keda-auth }
       metadata:
-        listName: bull:sms-send.primary:wait
+        listName: bull:sms-send.twilio-primary:wait
         listLength: "500"
         enableTLS: "true"
 ---

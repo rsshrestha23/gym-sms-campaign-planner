@@ -16,10 +16,10 @@
 - **Operations**: signed webhooks with key rotation, per-pod rate limits, Prometheus metrics with alerts, JSON logs with correlation ids and phone redaction, opt-in OpenTelemetry, liveness/readiness split, admin controls, partitioned receipts with retention, and Kubernetes manifests.
 
 ## Exactly-once sending: what is and isn't guaranteed
-The claims guarantee that no two workers call the provider for the same send at the same time. A crash after the provider accepted but before the commit is retried with the **same idempotency key**. If the provider honours that key for `PROVIDER_IDEMPOTENCY_WINDOW_MS`, that is exactly-once acceptance. An ambiguous send older than the window is parked in `dead_letter` (still `planned`) for manual reconciliation rather than resent. Without provider-side idempotency the honest guarantee is "at least once, never concurrently".
+The claims guarantee that no two workers call the provider for the same send at the same time. A crash after the provider accepted but before the commit is retried with the **same idempotency key**. If the provider honours that key for `PROVIDER_IDEMPOTENCY_WINDOW_MS`, that is exactly-once acceptance. An ambiguous send older than the window is parked in `dead_letter` (still `planned`) for manual reconciliation rather than resent. **With Twilio** (no idempotency key on the Messages API) the window is 0: an ambiguous send is looked up by recipient and body, recorded as sent if found, and otherwise parked. The guarantee is therefore "never two concurrent calls, never a blind second call". A member can miss a message that an operator then decides about, but is not double-texted by retries.
 
 ## Still open (needs decisions, not code)
-- The SMS vendor: the generic HTTPS adapter and a mock provider stand in, and its signature scheme, quotas, and key-retention window are still unknown.
+- **Twilio** is the selected vendor (adapter, `/v1/webhooks/twilio`, and `X-Twilio-Signature` verification are built, checked against Twilio's SDK, and tested against a fake API, not live Twilio). Its Messages API has **no idempotency key**, so ambiguous sends are resolved by lookup and otherwise parked, never blindly retried. That gives "never concurrently, never blindly twice", not guaranteed exactly-once. Still needed: real account SIDs, the Messaging Service, and its throughput.
 - The cloud target: the manifests are generic Kubernetes and haven't been applied to a cluster.
-- The approved missed-slot policy (implemented: mark `not_scheduled` and alert).
+- Capacity rule (keep, accept ~96% not scheduled) and missed-slot policy (mark `not_scheduled` + alert) are **approved as built**.
 - Retention and legal periods, and a staging restore drill against the managed database.

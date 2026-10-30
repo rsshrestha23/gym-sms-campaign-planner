@@ -1,4 +1,6 @@
 export interface SendSmsInput {
+  /** Our send id, for providers that carry a reference into their callbacks. */
+  sendId?: number;
   to: string;
   body: string;
   /** Stable per send (`campaign-send:<sendId>`): the provider must return the original result on reuse. */
@@ -14,7 +16,18 @@ export interface SendSmsResult {
 
 export interface SmsProvider {
   readonly name: string;
+  /**
+   * True when the provider dedupes requests by `idempotencyKey`, so an ambiguous attempt can be
+   * retried safely. Defaults to true; false (e.g. Twilio's Messages API) disables blind retries
+   * of ambiguous outcomes.
+   */
+  readonly idempotent?: boolean;
   send(input: SendSmsInput): Promise<SendSmsResult>;
+  /**
+   * For non-idempotent providers: finds a message the provider accepted for this input at or
+   * after `since`, so an ambiguous attempt can be resolved without sending again.
+   */
+  findAccepted?(input: SendSmsInput, since: Date): Promise<SendSmsResult | null>;
 }
 
 /**

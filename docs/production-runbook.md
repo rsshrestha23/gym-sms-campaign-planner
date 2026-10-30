@@ -64,6 +64,31 @@ is ever sent late or out of window, so a backlog costs reach, not compliance.
   Sends whose slots pass during the pause become `missed_slot`.
 - Liveness probes never depend on the provider; don't restart pods for a provider outage.
 
+## Twilio specifics
+
+- **No idempotency key.** Twilio's Messages API can't dedupe a retried create. When the outcome
+  is ambiguous (timeout, a 502 without a Twilio error body), the worker does **not** retry. It
+  lists recent messages to that number (`GET /Messages.json?To=…`) and matches the exact body
+  created since the attempt started. A match records the send as `sent` with that `SM…` sid. No
+  match parks it in `dead_letter` (still `planned`). Before retrying a parked send, check the
+  Twilio console or Message logs for the number: if a message exists, don't retry.
+- **STOP replies.** Twilio error 21610 (recipient unsubscribed) fails that send and sets
+  `members.sms_opt_out = true`, so the member's other planned sends are suppressed at claim.
+- **Status callbacks** go to `/v1/webhooks/twilio?sendId=…`, signed with the account auth token.
+  The URL Twilio signs must equal `TWILIO_WEBHOOK_PUBLIC_BASE_URL` + path; a proxy that rewrites
+  the host or scheme causes `WebhookInvalidSignatures`.
+- **Auth token rotation:** create the secondary token in Twilio, set `gym-sms/twilio-auth-tokens`
+  to `primary,secondary`, reload (SIGHUP or restart), promote the secondary in Twilio, then
+  remove the old token from the secret. API key secrets used for sending
+  (`twilio-api-key-secret`) rotate independently: create a new key, update the secret, restart
+  workers, delete the old key.
+- **Missing callbacks.** Twilio doesn't guarantee delivery of status callbacks, so a send can
+  stay `sent` without a final status. Query `SELECT id, provider_message_id FROM sends WHERE
+  status = 'sent' AND updated_at < now() - interval '24 hours'` and check those sids in Twilio.
+  An automated status poller is a planned follow-up (see the capacity report).
+- **Throughput:** `PROVIDER_RATE_LIMIT_PER_SECOND` must not exceed the Messaging Service's MPS.
+  Twilio 429/20429 responses pause the whole queue for `Retry-After`.
+
 ## Dead letters
 
 `dead_letter` = automatic retries exhausted. `GET $API/v1/admin/campaigns/$ID/dead-letters` lists

@@ -13,6 +13,7 @@ import { registry } from './observability/metrics';
 import { StatusEventRelay, StatusFanout } from './webhooks/event-outbox';
 import { ProviderWebhookService } from './webhooks/provider-service';
 import { webhookRoutes, WebhookOptions } from './webhooks/routes';
+import { twilioWebhookRoutes, TwilioWebhookOptions } from './webhooks/twilio';
 import { mountVersions } from './versioning';
 
 export interface AppDeps {
@@ -34,6 +35,8 @@ export interface AppDeps {
    */
   statusDrain?: 'await' | 'background';
   webhook?: WebhookOptions;
+  /** Enables POST /v1/webhooks/twilio (Twilio status callbacks). */
+  twilio?: TwilioWebhookOptions;
   readinessChecks?: ReadinessCheck[];
   /** Enables /v1/admin when set. */
   adminToken?: string;
@@ -53,6 +56,7 @@ export function createApp({
   publisher,
   statusDrain = 'await',
   webhook,
+  twilio,
   readinessChecks,
   adminToken,
   queueControl,
@@ -87,6 +91,7 @@ export function createApp({
 
   const v1 = express.Router();
   v1.use(webhookRoutes(webhookService, webhook));
+  if (twilio) v1.use(twilioWebhookRoutes(webhookService, twilio));
   v1.use(express.json({ limit: '16kb' }));
   v1.use(campaignRoutes(repo));
   if (hub) v1.use(liveRoutes(repo, hub));

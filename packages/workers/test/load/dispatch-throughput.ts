@@ -22,6 +22,7 @@ import { OutboxRelay } from '../../../api/src/outbox/relay';
 import { dispatchDueBatch } from '../../../dispatcher/src/due-send-loop';
 import { ProviderError, SendSmsInput } from '../../src/providers/provider';
 import { SimulatedBehaviour, SimulatedProvider } from '../../src/providers/simulated-provider';
+import { defaultJobOptions } from '../../src/queues/sms-send';
 import { createSmsWorker } from '../../src/worker';
 
 process.env.LOG_LEVEL ??= 'silent';
@@ -68,7 +69,8 @@ async function main() {
   const redisUrl = process.env.LOAD_REDIS_URL ?? 'redis://localhost:6380';
   const redis = new IORedis(redisUrl, { maxRetriesPerRequest: null });
   const queueName = `sms-send.load-${Date.now()}`;
-  const queue = new Queue(queueName, { connection: redis });
+  // Production retry policy (8 attempts, exponential backoff + jitter).
+  const queue = new Queue(queueName, { connection: redis, defaultJobOptions });
   const info = async (key: string) => Number((await redis.info('memory')).match(new RegExp(`^${key}:(\\d+)`, 'm'))?.[1] ?? 0);
   const report: Record<string, unknown> = { zone, branches: BRANCHES, slotsPerBranch: SLOTS, workers: WORKERS, concurrency: CONCURRENCY, providerRateLimit: RATE };
 
@@ -94,16 +96,18 @@ async function main() {
          FROM members m`,
       [lastSlot, perBranch],
     );
-    const due = Number((await pool.query(`SELECT count(*) AS n FROM sends WHERE scheduled_at <= now()`)).rows[0].n);
+    // Every send becomes due within two minutes: the future slot must go out at its slot, not before.
+    const due = Number((await pool.query(`SELECT count(*) AS n FROM sends`)).rows[0].n);
     const future = Number((await pool.query(`SELECT count(*) AS n FROM sends WHERE scheduled_at > now()`)).rows[0].n);
-    report.dueSends = due;
-    report.futureSends = future;
+    report.sends = due;
+    report.notYetDueAtStart = future;
 
     const provider = new FaultyProvider();
     const claims = new ClaimService(pool, { workerId: `${os.hostname()}-load`, leaseMs: 5_000, idempotencyWindowMs: 3600_000 });
-    const workers = Array.from({ length: WORKERS }, () =>
+    const workerConnections = Array.from({ length: WORKERS }, () => redis.duplicate());
+    const workers = workerConnections.map((connection) =>
       createSmsWorker({
-        connection: redis.duplicate(), queueName, claims, provider, concurrency: CONCURRENCY, maxAttempts: 8,
+        connection, queueName, claims, provider, concurrency: CONCURRENCY, maxAttempts: 8,
         limiter: { max: RATE, duration: 1000 }, lockDuration: 5_000, stalledInterval: 5_000,
       }),
     );
@@ -129,7 +133,7 @@ async function main() {
     })();
 
     const terminal = async () =>
-      Number((await pool.query(`SELECT count(*) AS n FROM sends WHERE scheduled_at <= $1 AND status <> 'planned' OR (status = 'planned' AND dispatch_state = 'dead_letter')`, [new Date(lastSlot)])).rows[0].n);
+      Number((await pool.query(`SELECT count(*) AS n FROM sends WHERE status <> 'planned' OR dispatch_state = 'dead_letter'`)).rows[0].n);
     const deadline = Date.now() + 15 * 60_000;
     let done = 0;
     while ((done = await terminal()) < due && Date.now() < deadline) await new Promise((x) => setTimeout(x, 500));
@@ -137,6 +141,8 @@ async function main() {
     stop = true;
     await Promise.all([...loops, killer]);
     await Promise.all(workers.slice(1).map((w) => w.close()));
+    // Workers don't own the connections they were given; close them or the process never exits.
+    workerConnections.forEach((c) => c.disconnect());
     const redisAfter = await info('used_memory');
 
     const q = async (sql: string, p: unknown[] = []) => (await pool.query(sql, p)).rows;
@@ -145,12 +151,20 @@ async function main() {
         count(*) FILTER (WHERE status = 'failed')::int AS failed,
         count(*) FILTER (WHERE status = 'not_scheduled')::int AS missed,
         count(*) FILTER (WHERE dispatch_state = 'dead_letter')::int AS dead_letter,
-        count(*) FILTER (WHERE status = 'planned' AND scheduled_at > now() - interval '1 second' AND dispatch_state = 'waiting')::int AS future_untouched
+        count(*) FILTER (WHERE status = 'planned' AND dispatch_state = 'dead_letter')::int AS parked_ambiguous
       FROM sends`);
+    // Lag is only meaningful for slots that arrived during the run; earlier slots were a
+    // deliberate backlog at start (reported as drain time instead).
     const lags = (await q(
       `SELECT EXTRACT(EPOCH FROM a.started_at - s.scheduled_at)::float AS lag FROM send_attempts a JOIN sends s ON s.id = a.send_id
-        WHERE a.attempt_number = 1 ORDER BY 1`,
+        WHERE a.attempt_number = 1 AND s.scheduled_at > $1 ORDER BY 1`,
+      [new Date(started)],
     )).map((r) => r.lag as number);
+    const [drain] = await q(
+      `SELECT EXTRACT(EPOCH FROM max(a.finished_at) - $1::timestamptz)::float AS seconds, count(DISTINCT s.id)::int AS n
+         FROM sends s JOIN send_attempts a ON a.send_id = s.id AND a.outcome = 'accepted' WHERE s.scheduled_at <= $1`,
+      [new Date(started)],
+    );
     const [early] = await q(`SELECT count(*)::int AS n FROM send_attempts a JOIN sends s ON s.id = a.send_id WHERE a.started_at < s.scheduled_at`);
     const [outcomes] = await q(`SELECT jsonb_object_agg(outcome, n) AS o FROM (SELECT outcome, count(*)::int AS n FROM send_attempts GROUP BY 1) x`);
     const acceptedKeys = provider.acceptanceCount;
@@ -159,7 +173,6 @@ async function main() {
     report.result = {
       seconds: +elapsed.toFixed(1),
       terminalOfDue: `${done}/${due}`,
-      sendsPerSecond: Math.round(states.sent / elapsed),
       ...states,
       providerCalls: provider.calls,
       providerAcceptances: acceptedKeys,
@@ -167,14 +180,16 @@ async function main() {
       attemptsByOutcome: outcomes.o,
       activeJobsWhenWorkerKilled: killedActive,
       sentBeforeSlot: early.n,
-      firstAttemptLagSeconds: { p50: +pct(lags, 50).toFixed(2), p95: +pct(lags, 95).toFixed(2), max: +(lags[lags.length - 1] ?? 0).toFixed(2) },
+      backlogAtStart: drain.n,
+      backlogDrainSeconds: +drain.seconds.toFixed(1),
+      backlogSendsPerSecond: Math.round(drain.n / drain.seconds),
+      onTimeFirstAttemptLagSeconds: { p50: +pct(lags, 50).toFixed(2), p95: +pct(lags, 95).toFixed(2), max: +(lags[lags.length - 1] ?? 0).toFixed(2) },
       peakQueuedJobs: peakQueue,
       redisUsedMemoryMB: { before: +(redisBefore / 2 ** 20).toFixed(1), after: +(redisAfter / 2 ** 20).toFixed(1) },
     };
     // Exactly-once acceptance per send: every accepted idempotency key maps to exactly one send.
     report.invariants = {
-      noEarlySends: early.n === 0,
-      futureSlotsUntouched: states.future_untouched === future,
+      noAttemptBeforeItsSlot: early.n === 0,
       oneAcceptancePerSentSend: acceptedKeys === sentWithMessage,
       allDueSendsTerminal: done === due,
     };
@@ -187,7 +202,10 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+main().then(
+  () => process.exit(0),
+  (err) => {
+    console.error(err);
+    process.exit(1);
+  },
+);

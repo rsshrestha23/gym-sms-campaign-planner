@@ -239,6 +239,13 @@ describe('send processor with database claims', () => {
     expect((await attempts(other)).map((a) => a.outcome)).toEqual(['retryable_error', 'retryable_error']);
   });
 
+  it("dead-letters at the job's own attempt limit so BullMQ and PostgreSQL agree", async () => {
+    const provider = new SimulatedProvider().enqueue({ type: 'error', error: new ProviderError('retryable', '503', 'down') });
+    const job = { ...fakeJob(), opts: { attempts: 1 } } as Job<SendJobData>;
+    expect(await createSendSmsProcessor({ claims: claims(), provider, maxAttempts: 8 })(job)).toEqual({ result: 'dead_letter', reason: 'retryable_error' });
+    expect(await sendRow()).toMatchObject({ status: 'failed', dispatch_state: 'dead_letter' });
+  });
+
   it('keeps an ambiguous send planned (not failed) when retries run out', async () => {
     const provider = new SimulatedProvider().enqueue({ type: 'error', error: new ProviderError('ambiguous', 'TIMEOUT', 'lost') });
     expect(await createSendSmsProcessor({ claims: claims(), provider, maxAttempts: 1 })(fakeJob())).toEqual({ result: 'dead_letter', reason: 'ambiguous' });

@@ -7,12 +7,18 @@ data:
   LOG_LEVEL: info
   RUN_MIGRATIONS: "false"       # the migrate Job owns schema changes
   SEED_DEMO_DATA: "false"
-  SMS_PROVIDER: http
-  SMS_PROVIDER_ACCOUNT: primary
-  SMS_PROVIDER_URL: https://sms-vendor.example.com/v1/messages   # replace once a vendor is selected
+  SMS_PROVIDER: twilio
+  SMS_PROVIDER_ACCOUNT: twilio-primary           # BullMQ queue (and rate limit) per Twilio account
+  TWILIO_ACCOUNT_SID: ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx         # replace
+  TWILIO_API_KEY_SID: SKxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx         # revocable API key; secret in the secret manager
+  TWILIO_MESSAGING_SERVICE_SID: MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  # sender pool, A2P/STOP compliance
+  TWILIO_STATUS_CALLBACK_URL: https://webhooks.example.com/v1/webhooks/twilio
+  TWILIO_WEBHOOK_PUBLIC_BASE_URL: https://webhooks.example.com     # must match what Twilio signs
   SMS_PROVIDER_TIMEOUT_MS: "10000"
-  PROVIDER_RATE_LIMIT_PER_SECOND: "100"     # vendor account quota, enforced queue-wide
-  PROVIDER_IDEMPOTENCY_WINDOW_MS: "86400000" # must not exceed the vendor's key retention
+  # Twilio's account/Messaging Service throughput (MPS), enforced queue-wide. Confirm with Twilio.
+  PROVIDER_RATE_LIMIT_PER_SECOND: "100"
+  # Twilio's Messages API has no idempotency key: ambiguous sends are resolved by lookup, then parked.
+  PROVIDER_IDEMPOTENCY_WINDOW_MS: "0"
   WORKER_CONCURRENCY: "25"
   SEND_MAX_ATTEMPTS: "8"
   CLAIM_LEASE_MS: "60000"

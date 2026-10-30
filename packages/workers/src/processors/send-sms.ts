@@ -5,6 +5,9 @@ import type { SendJobData } from '../../../api/src/delivery/types';
 import { jobResults, providerLatency, providerResponses } from '../observability/metrics';
 import { maskPhone, ProviderError, SmsProvider } from '../providers/provider';
 
+/** Provider error codes meaning the recipient unsubscribed (Twilio 21610: replied STOP). */
+const UNSUBSCRIBED_CODES = new Set(['21610']);
+
 /** Thrown to make BullMQ retry the job with its exponential backoff + jitter. */
 export class RetryableJobError extends Error {
   constructor(message: string) {
@@ -64,8 +67,10 @@ export function createSendSmsProcessor(deps: ProcessorDeps) {
     let retryAfterMs: number | undefined;
     const correlationId = randomUUID();
     const started = process.hrtime.bigint();
+    const attemptStarted = new Date();
     try {
       const sent = await deps.provider.send({
+        sendId: claim.sendId,
         to: claim.to,
         body: claim.body,
         idempotencyKey: claim.idempotencyKey,
@@ -77,6 +82,10 @@ export function createSendSmsProcessor(deps: ProcessorDeps) {
       retryAfterMs = e.retryAfterMs;
       const outcome = e.kind === 'permanent' ? 'permanent_error' : e.kind === 'rate_limited' ? 'rate_limited' : e.kind === 'retryable' ? 'retryable_error' : 'ambiguous';
       result = { outcome, code: e.code, message: e.message, providerRequestId: e.providerRequestId } as AttemptResult;
+      if (outcome === 'ambiguous' && deps.provider.idempotent === false) {
+        result = await resolveAmbiguous(deps.provider, claim, correlationId, attemptStarted, e);
+        log('provider.ambiguous_lookup', { sendId: claim.sendId, found: result.outcome === 'accepted' });
+      }
     } finally {
       clearInterval(heartbeat);
     }
@@ -97,6 +106,33 @@ export function createSendSmsProcessor(deps: ProcessorDeps) {
   };
 }
 
+/**
+ * A non-idempotent provider (Twilio) may have created the message even though we saw an error.
+ * Retrying could text the member twice, so look it up instead: found -> it was sent; not found
+ * (or the lookup itself fails) -> park in dead_letter, still `planned`, for an operator.
+ */
+async function resolveAmbiguous(
+  provider: SmsProvider,
+  claim: Claim,
+  correlationId: string,
+  since: Date,
+  error: ProviderError,
+): Promise<AttemptResult> {
+  const input = { sendId: claim.sendId, to: claim.to, body: claim.body, idempotencyKey: claim.idempotencyKey, correlationId };
+  try {
+    const found = await provider.findAccepted?.(input, since);
+    if (found) return { outcome: 'accepted', providerMessageId: found.providerMessageId, providerRequestId: error.providerRequestId };
+  } catch {
+    // fall through: unknown stays unknown
+  }
+  return {
+    outcome: 'exhausted',
+    lastOutcome: 'ambiguous',
+    code: error.code,
+    message: `${error.message}; not found by provider lookup and the provider is not idempotent, so not retried`,
+  };
+}
+
 async function finish(
   deps: ProcessorDeps,
   job: Job<SendJobData>,
@@ -111,10 +147,15 @@ async function finish(
   }
   if (result.outcome === 'permanent_error') {
     await deps.claims.complete(claim, result);
+    if (UNSUBSCRIBED_CODES.has(result.code)) await deps.claims.recordProviderOptOut(claim.sendId);
     jobResults.inc({ result: 'failed', reason: result.code });
     return { result: 'failed', reason: result.code };
   }
-  if (result.outcome === 'exhausted') throw new Error('unreachable');
+  if (result.outcome === 'exhausted') {
+    await deps.claims.complete(claim, result);
+    jobResults.inc({ result: 'dead_letter', reason: result.lastOutcome });
+    return { result: 'dead_letter', reason: result.lastOutcome };
+  }
 
   // 429: back off the whole provider account without spending one of this job's attempts.
   if (result.outcome === 'rate_limited' && deps.onRateLimited) {
@@ -124,7 +165,9 @@ async function finish(
   }
 
   const attemptsMade = job.attemptsMade + 1; // BullMQ counts this attempt only after we throw
-  if (attemptsMade >= deps.maxAttempts) {
+  // The job's own limit wins: if BullMQ won't retry, PostgreSQL must not be left in retry_wait.
+  const maxAttempts = job.opts?.attempts ?? deps.maxAttempts;
+  if (attemptsMade >= maxAttempts) {
     await deps.claims.complete(claim, { outcome: 'exhausted', lastOutcome: result.outcome, code: result.code, message: result.message });
     jobResults.inc({ result: 'dead_letter', reason: result.outcome });
     return { result: 'dead_letter', reason: result.outcome };
